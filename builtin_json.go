@@ -3,33 +3,26 @@ package goja
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"math"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
-
-	"github.com/dop251/goja/unistring"
 )
 
 const hex = "0123456789abcdef"
 
 func (r *Runtime) builtinJSON_parse(call FunctionCall) Value {
-	d := json.NewDecoder(strings.NewReader(call.Argument(0).toString().String()))
+	p := jsonParser{s: call.Argument(0).toString().String()}
 
-	value, err := r.builtinJSON_decodeValue(d)
-	if errors.Is(err, io.EOF) {
-		panic(r.newErrorf(r.getSyntaxError(), "Unexpected end of JSON input (%v)", err.Error()))
-	}
-	if err != nil {
-		panic(r.newError(r.getSyntaxError(), err.Error()))
+	value := p.parseValue(r)
+	if p.failed {
+		panic(r.newError(r.getSyntaxError(), p.err))
 	}
 
-	if tok, err := d.Token(); err != io.EOF {
-		panic(r.newErrorf(r.getSyntaxError(), "Unexpected token at the end: %v", tok))
+	p.skipSpaces()
+	if p.pos != len(p.s) {
+		panic(r.newErrorf(r.getSyntaxError(), "Unexpected token at the end: %s", string(p.s[p.pos])))
 	}
 
 	var reviver func(FunctionCall) Value
@@ -45,96 +38,6 @@ func (r *Runtime) builtinJSON_parse(call FunctionCall) Value {
 	}
 
 	return value
-}
-
-func (r *Runtime) builtinJSON_decodeToken(d *json.Decoder, tok json.Token) (Value, error) {
-	switch tok := tok.(type) {
-	case json.Delim:
-		switch tok {
-		case '{':
-			return r.builtinJSON_decodeObject(d)
-		case '[':
-			return r.builtinJSON_decodeArray(d)
-		}
-	case nil:
-		return _null, nil
-	case string:
-		return newStringValue(tok), nil
-	case float64:
-		return floatToValue(tok), nil
-	case bool:
-		if tok {
-			return valueTrue, nil
-		}
-		return valueFalse, nil
-	}
-	return nil, fmt.Errorf("Unexpected token (%T): %v", tok, tok)
-}
-
-func (r *Runtime) builtinJSON_decodeValue(d *json.Decoder) (Value, error) {
-	tok, err := d.Token()
-	if err != nil {
-		return nil, err
-	}
-	return r.builtinJSON_decodeToken(d, tok)
-}
-
-func (r *Runtime) builtinJSON_decodeObject(d *json.Decoder) (*Object, error) {
-	object := r.NewObject()
-	for {
-		key, end, err := r.builtinJSON_decodeObjectKey(d)
-		if err != nil {
-			return nil, err
-		}
-		if end {
-			break
-		}
-		value, err := r.builtinJSON_decodeValue(d)
-		if err != nil {
-			return nil, err
-		}
-
-		object.self._putProp(unistring.NewFromString(key), value, true, true, true)
-	}
-	return object, nil
-}
-
-func (r *Runtime) builtinJSON_decodeObjectKey(d *json.Decoder) (string, bool, error) {
-	tok, err := d.Token()
-	if err != nil {
-		return "", false, err
-	}
-	switch tok := tok.(type) {
-	case json.Delim:
-		if tok == '}' {
-			return "", true, nil
-		}
-	case string:
-		return tok, false, nil
-	}
-
-	return "", false, fmt.Errorf("Unexpected token (%T): %v", tok, tok)
-}
-
-func (r *Runtime) builtinJSON_decodeArray(d *json.Decoder) (*Object, error) {
-	var arrayValue []Value
-	for {
-		tok, err := d.Token()
-		if err != nil {
-			return nil, err
-		}
-		if delim, ok := tok.(json.Delim); ok {
-			if delim == ']' {
-				break
-			}
-		}
-		value, err := r.builtinJSON_decodeToken(d, tok)
-		if err != nil {
-			return nil, err
-		}
-		arrayValue = append(arrayValue, value)
-	}
-	return r.newArrayValues(arrayValue), nil
 }
 
 func (r *Runtime) builtinJSON_reviveWalk(reviver func(FunctionCall) Value, holder *Object, name Value) Value {

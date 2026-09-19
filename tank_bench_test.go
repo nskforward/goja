@@ -23,3 +23,26 @@ func BenchmarkTankIteration(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkTankJSONParse measures JSON.parse on a representative payload. It
+// guards the direct recursive-descent parser against regressions.
+func BenchmarkTankJSONParse(b *testing.B) {
+	const data = `{"id":123,"name":"test","active":true,"score":3.14,"tags":["a","b","c"],"nested":{"x":1,"y":2.5,"z":null}}`
+	rt := New()
+	jsonObj, ok := rt.Get("JSON").(*Object)
+	if !ok {
+		b.Fatal("no JSON")
+	}
+	parse, ok := AssertFunction(jsonObj.Get("parse"))
+	if !ok {
+		b.Fatal("no JSON.parse")
+	}
+	arg := rt.ToValue(data)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := parse(Undefined(), arg); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
