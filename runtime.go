@@ -2838,6 +2838,12 @@ func (r *Runtime) getHash() *maphash.Hash {
 	return r.hash
 }
 
+// maxRetainedStackSize bounds the value stack capacity kept between top-level
+// calls. Runtimes that are reused for many calls (as load-generator does)
+// otherwise re-allocate the stack on every call, while a runtime that once
+// grew an unusually deep stack should not keep that memory forever.
+const maxRetainedStackSize = 4096
+
 // called when the top level function returns normally (i.e. control is passed outside the Runtime).
 func (r *Runtime) leave() {
 	var jobs []func()
@@ -2848,7 +2854,19 @@ func (r *Runtime) leave() {
 		}
 	}
 	r.jobQueue = nil
-	r.vm.stack = nil
+	// Retain the value stack for the next call instead of dropping it: a
+	// reused Runtime then pays for the stack once rather than once per call.
+	// The slots are cleared so the GC is not kept alive by stale values, and
+	// an oversized stack is released to avoid pinning peak memory.
+	stack := r.vm.stack
+	if cap(stack) > maxRetainedStackSize {
+		r.vm.stack = nil
+	} else {
+		for i := range stack {
+			stack[i] = nil
+		}
+		r.vm.stack = stack[:0]
+	}
 }
 
 // called when the top level function returns (i.e. control is passed outside the Runtime) but it was due to an interrupt
